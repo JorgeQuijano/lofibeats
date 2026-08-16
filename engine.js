@@ -299,7 +299,7 @@
       // group same-voice events sorted ascending, dispatch with min spacing
       events.sort((a, b) => a.t - b.t);
       const lastTime = { piano: -1, bass: -1, sax: -1, kick: -1, snare: -1, hat: -1 };
-      const perVoiceMinGap = 0.012; // 12ms — Tone's inter-trigger minimum
+      const perVoiceMinGap = 0.025; // 25ms — generous spacing for any synth
 
       for (const e of events) {
         const desired = realNow + e.t;
