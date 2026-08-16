@@ -198,16 +198,20 @@
     T.bpm.value = pattern.tempo;
     const bpm = T.bpm.value;
 
-    const loopStart = Tone.now() + 0.2;        // anchor for THIS iteration
-    const beats = { bar: 4, half: 2, quarter: 1, eighth: 0.5, sixteenth: 0.25, '32n': 0.125 };
+    // anchor far enough in the future for Tone's clock to be ticking
+    const loopStart = Math.max(Tone.now() + 0.5, 0.6);
+    const swingShift = (pattern.swing - 0.5) * 0.18;     // up to 0.045 sec
 
     function at(barIdx, beat, sub = 0, swingAmt = 0) {
-      // bar 0..7, beat 0..3, sub is 16th-note index (0..3) — adds 0.25*sub beats
-      const offsetBeats = barIdx * 4 + beat + 0.25 * sub + swingAmt;
-      return loopStart + beatsToSeconds(offsetBeats, bpm);
+      // bar 0..7, beat 0..3 (quarter note), sub = 16th-note index within beat
+      const offsetSec = beatsToSeconds(barIdx * 4 + beat + 0.25 * sub, bpm) + swingAmt;
+      return loopStart + offsetSec;
     }
 
-    const swingShift = (pattern.swing - 0.5) * 0.25;     // up to 0.0625 beats
+    // collect every event (time, voice, fn) and sort by time so no same-voice time collisions
+    const events = [];
+    const queue = (voice, time, note, dur, vel) =>
+      events.push({ time, voice, note, dur, vel });
 
     for (let bar = 0; bar < 8; bar++) {
       const chord = pattern.progression[bar % pattern.progression.length];
@@ -215,52 +219,75 @@
       const bassNotes = chordNotes(chord.root, chord.type === 'maj7' || chord.type === '9'
         ? 'maj7' : 'm7', 2);
 
-      // pad: chord pad at start of every bar
-      voices.piano.triggerAttackRelease(notes, "1m", at(bar, 0));
-      voices.piano.triggerAttackRelease(notes.map(n => n * 2), "1m", at(bar, 0));
+      // pad (chord) at start of every bar
+      queue('piano', at(bar, 0), notes, '1m', 0.5);
+      queue('piano', at(bar, 0), notes.map(n => n * 2), '1m', 0.25);
 
       // arpeggio: swung off-beat 16ths over the chord
       for (let i = 0; i < 16; i++) {
         if (i % 2 === 1 && pattern.rng() < 0.7) {
-          const t = at(bar, Math.floor(i / 4), i % 4, swingShift);
+          const t = at(bar, Math.floor(i / 4), i % 4);
           const n = notes[Math.floor(pattern.rng() * notes.length)];
-          voices.piano.triggerAttackRelease(n, "16n", t, 0.4);
+          queue('piano', t, n, '16n', 0.4);
         }
       }
 
-      // bass: root on beat 1, fifth on beat 3
-      voices.bass.triggerAttackRelease(bassNotes[0], "4n", at(bar, 0), 0.8);
-      voices.bass.triggerAttackRelease(bassNotes[1] || bassNotes[0], "8n", at(bar, 2), 0.6);
+      // bass
+      queue('bass', at(bar, 0), bassNotes[0], '4n', 0.8);
+      queue('bass', at(bar, 2), bassNotes[1] || bassNotes[0], '8n', 0.6);
 
-      // melody: sparse sax over chord tone in upper voice
+      // melody: sparse sax over chord tone
       if (voices.sax && pattern.includeSax) {
         if (pattern.rng() < 0.6) {
           const melodyNotes = chordNotes(chord.root, chord.type, 5);
-          const pick1 = melodyNotes[Math.floor(pattern.rng() * melodyNotes.length)];
-          voices.sax.synth.triggerAttackRelease(pick1, "4n", at(bar, 1), 0.3);
+          queue('sax', at(bar, 1), pick(pattern.rng, melodyNotes), '4n', 0.3);
         }
         if (pattern.rng() < 0.4) {
           const melodyNotes = chordNotes(chord.root, chord.type, 5);
-          const pick2 = melodyNotes[Math.floor(pattern.rng() * melodyNotes.length)];
-          voices.sax.synth.triggerAttackRelease(pick2, "2n", at(bar, 2), 0.25);
+          queue('sax', at(bar, 2), pick(pattern.rng, melodyNotes), '2n', 0.25);
         }
       }
 
       // drums
       const density = pattern.drumDensity;
       const hatEvery = density === 'sparse' ? 4 : 2;
-      voices.drums.kick.triggerAttackRelease("C2", "8n", at(bar, 0), 0.9);
-      voices.drums.kick.triggerAttackRelease("C2", "8n", at(bar, 2), 0.7);
+      queue('kick', at(bar, 0), 'C2', '8n', 0.9);
+      queue('kick', at(bar, 2), 'C2', '8n', 0.7);
       if (density === 'bouncy' && bar % 2 === 1) {
-        voices.drums.kick.triggerAttackRelease("C2", "16n", at(bar, 0, 1, swingShift), 0.5);
+        queue('kick', at(bar, 0, 1), 'C2', '16n', 0.5);
       }
       if (bar % 2 === 1) {
-        voices.drums.snare.triggerAttackRelease("8n", at(bar, 1), 0.6);
+        queue('snare', at(bar, 1), 'C2', '8n', 0.6);
       }
       for (let i = 0; i < 16; i += hatEvery) {
-        const t = at(bar, Math.floor(i / 4), i % 4, swingShift);
+        const t = at(bar, Math.floor(i / 4), i % 4);
+        // nudge hats apart by tiny increments on (sub) to avoid same-voice time equality
+        const tJittered = t + (i % 4) * 0.001;
         const vel = (i % 4 === 0) ? 0.35 : 0.18;
-        voices.drums.hat.triggerAttackRelease("32n", t, vel);
+        queue('hat', tJittered, null, '32n', vel);
+      }
+    }
+
+    // sort by time, then dispatch
+    events.sort((a, b) => a.time - b.time);
+    let lastTime = { piano: -1, bass: -1, sax: -1, kick: -1, snare: -1, hat: -1 };
+    for (const e of events) {
+      // enforce strict monotonic time per voice
+      if (e.time <= lastTime[e.voice] + 0.001) {
+        e.time = lastTime[e.voice] + 0.005;
+      }
+      lastTime[e.voice] = e.time;
+      let v;
+      if (e.voice === 'piano') v = voices.piano;
+      else if (e.voice === 'bass') v = voices.bass;
+      else if (e.voice === 'sax') v = voices.sax.synth;
+      else if (e.voice === 'kick') v = voices.drums.kick;
+      else if (e.voice === 'snare') v = voices.drums.snare;
+      else if (e.voice === 'hat') v = voices.drums.hat;
+      if (e.note === null) {
+        v.triggerAttackRelease(e.dur, e.time, e.vel);
+      } else {
+        v.triggerAttackRelease(e.note, e.dur, e.time, e.vel);
       }
     }
 
