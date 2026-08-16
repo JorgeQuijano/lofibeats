@@ -186,68 +186,94 @@
   }
 
   // ---- sequence helpers ----------------------------------------------------
-  function tickLoop(pattern, voices, mix, onCrossfade) {
-    // schedule one full 8-bar loop; Tone.Transport handles timing
+  // We schedule events at absolute seconds offset from a "loop start" anchor.
+  // Tone.Transport drives the BPM; Loop repeats every 8 bars (~16-22s at our tempos).
+  // To avoid "scheduled in the past" errors, we always compute times as
+  //   loopStartTime + beatsToSeconds(... since loopStart)
+  // and re-arm the next loop before the current one expires (lookahead 4s).
+  function beatsToSeconds(beats, bpm) { return (60 / bpm) * beats; }
+
+  function scheduleLoop(pattern, voices) {
     const T = Tone.Transport;
     T.bpm.value = pattern.tempo;
-    const swing = pattern.swing;
-    const step = 0.25;                     // 16th note
-    const swingOffset = step * (swing - 0.5) * 2; // shift the off-beat 16ths
+    const bpm = T.bpm.value;
 
-    // 8 bars, 16 steps each = 128 steps
+    const loopStart = Tone.now() + 0.2;        // anchor for THIS iteration
+    const beats = { bar: 4, half: 2, quarter: 1, eighth: 0.5, sixteenth: 0.25, '32n': 0.125 };
+
+    function at(barIdx, beat, sub = 0, swingAmt = 0) {
+      // bar 0..7, beat 0..3, sub is 16th-note index (0..3) — adds 0.25*sub beats
+      const offsetBeats = barIdx * 4 + beat + 0.25 * sub + swingAmt;
+      return loopStart + beatsToSeconds(offsetBeats, bpm);
+    }
+
+    const swingShift = (pattern.swing - 0.5) * 0.25;     // up to 0.0625 beats
+
     for (let bar = 0; bar < 8; bar++) {
       const chord = pattern.progression[bar % pattern.progression.length];
       const notes = chordNotes(chord.root, chord.type, 4);
       const bassNotes = chordNotes(chord.root, chord.type === 'maj7' || chord.type === '9'
         ? 'maj7' : 'm7', 2);
 
-      // pad: chord pad at start of every bar (piano-ish)
-      const padTime = `${bar}:0:0`;
-      voices.piano.triggerAttackRelease(notes, "1m", padTime);
+      // pad: chord pad at start of every bar
+      voices.piano.triggerAttackRelease(notes, "1m", at(bar, 0));
+      voices.piano.triggerAttackRelease(notes.map(n => n * 2), "1m", at(bar, 0));
 
       // arpeggio: swung off-beat 16ths over the chord
       for (let i = 0; i < 16; i++) {
         if (i % 2 === 1 && pattern.rng() < 0.7) {
-          const t = `${bar}:0:${i}`;
+          const t = at(bar, Math.floor(i / 4), i % 4, swingShift);
           const n = notes[Math.floor(pattern.rng() * notes.length)];
           voices.piano.triggerAttackRelease(n, "16n", t, 0.4);
         }
       }
 
-      // bass: root + 5th on beat 1 and 3 with ghost notes
-      const bassRoot = bassNotes[0];
-      const bassFifth = bassNotes[1] || bassNotes[0];
-      voices.bass.triggerAttackRelease(bassRoot, "4n", `${bar}:0:0`, 0.8);
-      voices.bass.triggerAttackRelease(bassFifth, "8n", `${bar}:0:2`, 0.6);
+      // bass: root on beat 1, fifth on beat 3
+      voices.bass.triggerAttackRelease(bassNotes[0], "4n", at(bar, 0), 0.8);
+      voices.bass.triggerAttackRelease(bassNotes[1] || bassNotes[0], "8n", at(bar, 2), 0.6);
 
-      // melody: sparse sax-ish voice wandering over the chord
-      if (voices.sax && pattern.includeSax && pattern.rng() < 0.6) {
-        const melodyNotes = chordNotes(chord.root, chord.type, 5);
-        const pick1 = melodyNotes[Math.floor(pattern.rng() * melodyNotes.length)];
-        const pick2 = melodyNotes[Math.floor(pattern.rng() * melodyNotes.length)];
-        voices.sax.synth.triggerAttackRelease(pick1, "4n", `${bar}:1:0`, 0.35);
-        if (pattern.rng() < 0.7) {
-          voices.sax.synth.triggerAttackRelease(pick2, "2n", `${bar}:2:0`, 0.3);
+      // melody: sparse sax over chord tone in upper voice
+      if (voices.sax && pattern.includeSax) {
+        if (pattern.rng() < 0.6) {
+          const melodyNotes = chordNotes(chord.root, chord.type, 5);
+          const pick1 = melodyNotes[Math.floor(pattern.rng() * melodyNotes.length)];
+          voices.sax.synth.triggerAttackRelease(pick1, "4n", at(bar, 1), 0.3);
+        }
+        if (pattern.rng() < 0.4) {
+          const melodyNotes = chordNotes(chord.root, chord.type, 5);
+          const pick2 = melodyNotes[Math.floor(pattern.rng() * melodyNotes.length)];
+          voices.sax.synth.triggerAttackRelease(pick2, "2n", at(bar, 2), 0.25);
         }
       }
 
       // drums
       const density = pattern.drumDensity;
       const hatEvery = density === 'sparse' ? 4 : 2;
-      voices.drums.kick.triggerAttackRelease("C2", "8n", `${bar}:0:0`, 0.9);
-      voices.drums.kick.triggerAttackRelease("C2", "8n", `${bar}:0:2`, 0.7);
+      voices.drums.kick.triggerAttackRelease("C2", "8n", at(bar, 0), 0.9);
+      voices.drums.kick.triggerAttackRelease("C2", "8n", at(bar, 2), 0.7);
       if (density === 'bouncy' && bar % 2 === 1) {
-        voices.drums.kick.triggerAttackRelease("C2", "16n", `${bar}:0:1`, 0.5);
+        voices.drums.kick.triggerAttackRelease("C2", "16n", at(bar, 0, 1, swingShift), 0.5);
       }
       if (bar % 2 === 1) {
-        voices.drums.snare.triggerAttackRelease("8n", `${bar}:1:0`, 0.6);
+        voices.drums.snare.triggerAttackRelease("8n", at(bar, 1), 0.6);
       }
       for (let i = 0; i < 16; i += hatEvery) {
-        const t = `${bar}:0:${i}`;
-        const vel = (i % 4 === 0) ? 0.4 : 0.2;
+        const t = at(bar, Math.floor(i / 4), i % 4, swingShift);
+        const vel = (i % 4 === 0) ? 0.35 : 0.18;
         voices.drums.hat.triggerAttackRelease("32n", t, vel);
       }
     }
+
+    const totalSec = beatsToSeconds(32, bpm);
+    return { loopStart, totalSec };
+  }
+
+  function tickLoop(pattern, voices, mix) {
+    const { totalSec } = scheduleLoop(pattern, voices);
+    // re-arm a fresh loop ~3 seconds before this one ends so we never run out of audio
+    return setTimeout(() => {
+      if (voices && voices.piano) tickLoop(pattern, voices, mix);
+    }, (totalSec - 3) * 1000);
   }
 
   // ---- the public engine ---------------------------------------------------
@@ -297,13 +323,17 @@
         vinyl: (() => { const v = buildVinyl(); v.g.connect(this.mixBus.vinyl); return v; })(),
       };
 
-      this._loadBucket(Math.floor(Date.now() / BUCKET_MS));
-      Tone.Transport.start();
-
       this._loopId = setInterval(() => {
         const b = Math.floor(Date.now() / BUCKET_MS);
         if (b !== this.currentBucket) this._crossfadeToBucket(b);
       }, 1000);
+
+      // wait for the audio context to actually advance before scheduling anything
+      await Tone.context.resume();
+      // wait until Tone.now() is > 0 (tone.js needs a real elapsed time)
+      if (Tone.now() < 0.05) await new Promise(r => setTimeout(r, 60));
+
+      this._loadBucket(Math.floor(Date.now() / BUCKET_MS));
 
       this._emit('started', { pattern: this.pattern });
     }
@@ -317,10 +347,12 @@
         if (v && typeof v.dispose === 'function') v.dispose();
         else if (v && v.synth) v.synth.dispose();
       });
+      if (this._loopTimer) clearTimeout(this._loopTimer);
       Object.values(this.mixBus).forEach(g => g.dispose());
       this.started = false;
       this.currentBucket = -1;
       this.pattern = null;
+      this._loopTimer = null;
     }
 
     setMix(name, value) {
@@ -336,7 +368,7 @@
       if (this.voices && this.mixBus) {
         this.mixBus.sax.gain.rampTo(this.pattern.includeSax ? 0.7 : 0, 0.5);
       }
-      tickLoop(this.pattern, this.voices, this.mixBus);
+      this._loopTimer = tickLoop(this.pattern, this.voices, this.mixBus);
       this._emit('bucket', this.pattern);
     }
 
