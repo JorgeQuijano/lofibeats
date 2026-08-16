@@ -270,15 +270,12 @@
 
     // sort by time, then dispatch
     events.sort((a, b) => a.time - b.time);
-    let lastTime = { piano: -1, bass: -1, sax: -1, kick: -1, snare: -1, hat: -1 };
+    const lastTime = { piano: -1, bass: -1, sax: -1, kick: -1, snare: -1, hat: -1 };
+    // capture clock once. Every event gets at least 5ms ahead of (lastTime[voice] OR now).
+    const clockFloor = Tone.now() + 0.05;
     for (const e of events) {
-      // 1. enforce strict monotonic time per voice
-      if (e.time <= lastTime[e.voice] + 0.001) {
-        e.time = lastTime[e.voice] + 0.005;
-      }
-      // 2. never schedule in the past relative to the running audio context
-      const now = Tone.now();
-      if (e.time < now + 0.01) e.time = now + 0.015;
+      const minTime = Math.max(lastTime[e.voice] + 0.005, clockFloor);
+      if (e.time < minTime) e.time = minTime;
       lastTime[e.voice] = e.time;
       let v;
       if (e.voice === 'piano') v = voices.piano;
