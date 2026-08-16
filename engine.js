@@ -272,10 +272,13 @@
     events.sort((a, b) => a.time - b.time);
     let lastTime = { piano: -1, bass: -1, sax: -1, kick: -1, snare: -1, hat: -1 };
     for (const e of events) {
-      // enforce strict monotonic time per voice
+      // 1. enforce strict monotonic time per voice
       if (e.time <= lastTime[e.voice] + 0.001) {
         e.time = lastTime[e.voice] + 0.005;
       }
+      // 2. never schedule in the past relative to the running audio context
+      const now = Tone.now();
+      if (e.time < now + 0.01) e.time = now + 0.015;
       lastTime[e.voice] = e.time;
       let v;
       if (e.voice === 'piano') v = voices.piano;
