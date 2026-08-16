@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0e0a18">
+  <meta name="description" content="lofi beats — infinite random radio, generated live in your browser">
+  <title>lofibeats — random lofi radio</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🎧%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <h1>lofibeats</h1>
+      <p class="tag">infinite random lofi — generated live, never the same twice</p>
+    </header>
+
+    <section class="now-playing" aria-live="polite">
+      <div class="meta">
+        <span class="dot" id="dot"></span>
+        <span id="status">off</span>
+      </div>
+      <div class="seed" id="seed-label">—</div>
+    </section>
+
+    <button id="play" class="play" aria-label="play stream">
+      <span class="play-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+      </span>
+      <span class="play-label">tap to start</span>
+    </button>
+
+    <details class="mix" id="mix">
+      <summary>your mix</summary>
+      <div class="mix-grid">
+        <label class="knob">
+          <span>piano</span>
+          <input type="range" min="0" max="1.4" step="0.05" value="1" data-instrument="piano">
+        </label>
+        <label class="knob">
+          <span>sax</span>
+          <input type="range" min="0" max="1.4" step="0.05" value="0" data-instrument="sax">
+        </label>
+        <label class="knob">
+          <span>bass</span>
+          <input type="range" min="0" max="1.4" step="0.05" value="1" data-instrument="bass">
+        </label>
+        <label class="knob">
+          <span>drums</span>
+          <input type="range" min="0" max="1.4" step="0.05" value="1" data-instrument="drums">
+        </label>
+        <label class="knob">
+          <span>vinyl crackle</span>
+          <input type="range" min="0" max="1.4" step="0.05" value="0.4" data-instrument="vinyl">
+        </label>
+      </div>
+      <p class="hint">everyone hears the same stream right now — these are local-only tweaks.</p>
+    </details>
+
+    <footer>
+      <span id="next-label">next beat switch in —</span>
+    </footer>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"></script>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
